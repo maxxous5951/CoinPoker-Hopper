@@ -10,6 +10,7 @@ import pyautogui
 import tkinter as tk
 from datetime import datetime
 
+from window_manager import WindowManager
 from utils.image_utils import take_screenshot, find_on_screen, click_on_image
 from utils.config_utils import save_tournament_offsets, load_tournament_offsets
 
@@ -29,6 +30,9 @@ class CoinPokerHopper:
         self.running = False
         self.status_callback = None
         
+        # Initialiser le gestionnaire de fenêtres
+        self.window_manager = WindowManager()
+        
         # Créer les dossiers nécessaires s'ils n'existent pas
         os.makedirs(self.screenshots_dir, exist_ok=True)
         os.makedirs(self.images_dir, exist_ok=True)
@@ -46,16 +50,23 @@ class CoinPokerHopper:
     def focus_coinpoker_window(self):
         """Tente de mettre la fenêtre CoinPoker au premier plan"""
         try:
-            # Chercher le logo CoinPoker ou la barre de titre
-            coinpoker_logo = find_on_screen(f"{self.images_dir}/coinpoker_logo.png")
-            
-            if coinpoker_logo:
-                pyautogui.click(coinpoker_logo)
+            # Utiliser le WindowManager pour gérer la mise au premier plan
+            if self.window_manager.ensure_coinpoker_window_focused():
                 self.update_status("Fenêtre CoinPoker mise au premier plan")
+                time.sleep(0.5)  # Petit délai pour s'assurer que la fenêtre est bien active
                 return True
             else:
-                self.update_status("Impossible de trouver la fenêtre CoinPoker")
-                return False
+                # Fallback : essayer l'ancienne méthode avec le logo
+                coinpoker_logo = find_on_screen(f"{self.images_dir}/coinpoker_logo.png")
+                
+                if coinpoker_logo:
+                    pyautogui.click(coinpoker_logo)
+                    self.update_status("Fenêtre CoinPoker mise au premier plan (méthode fallback)")
+                    time.sleep(0.5)
+                    return True
+                else:
+                    self.update_status("Impossible de trouver la fenêtre CoinPoker")
+                    return False
         except Exception as e:
             self.update_status(f"Erreur lors de la mise au premier plan: {str(e)}")
             return False
@@ -477,10 +488,3 @@ class CoinPokerHopper:
             self.update_status(f"Bouton REGISTERING spécifique au tournoi '{self.tournament_name}' capturé")
             self.update_status(f"Offset entre le nom du tournoi et son bouton: X={x_offset}, Y={y_offset}")
             self.update_status("Configuration des images de référence terminée!")
-            
-            if parent_window:
-                tk.messagebox.showinfo("Configuration terminée", "La configuration des images de référence est terminée avec succès!")
-        
-        # Démarrer le processus
-        show_instruction("1. Assurez-vous que CoinPoker est ouvert et visible. Cliquez sur 'Prêt' quand vous êtes prêt...", 
-                         lambda: show_instruction("2. Positionnez votre souris sur le logo CoinPoker et cliquez sur 'Prêt'", capture_logo))
