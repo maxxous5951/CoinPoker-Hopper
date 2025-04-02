@@ -22,11 +22,12 @@ class HopperGUI:
         """
         self.root = root
         self.root.title("CoinPoker Tournament Hopper")
-        self.root.geometry("550x400")
+        self.root.geometry("550x450")  # Légèrement plus grand pour accueillir l'option de surveillance de fenêtre
         self.root.resizable(True, True)
         
         self.hopper = None
         self.hopper_thread = None
+        self.window_check_thread = None
         
         self.create_widgets()
         self.load_tournaments()
@@ -61,26 +62,35 @@ class HopperGUI:
         ttk.Button(buttons_frame, text="Supprimer", command=self.delete_tournament).pack(side="left", padx=5)
         
         # Section contrôles
-        controls_frame = ttk.LabelFrame(main_frame, text="Contrôles", padding="10")
-        controls_frame.pack(fill="x", padx=5, pady=5)
+        self.controls_frame = ttk.LabelFrame(main_frame, text="Contrôles", padding="10")
+        self.controls_frame.pack(fill="x", padx=5, pady=5)
         
         # Nombre de tentatives
-        ttk.Label(controls_frame, text="Tentatives max :").grid(row=0, column=0, sticky="w", padx=5, pady=5)
+        ttk.Label(self.controls_frame, text="Tentatives max :").grid(row=0, column=0, sticky="w", padx=5, pady=5)
         self.attempts_var = tk.StringVar(value="30")
-        attempts_entry = ttk.Entry(controls_frame, textvariable=self.attempts_var, width=10)
+        attempts_entry = ttk.Entry(self.controls_frame, textvariable=self.attempts_var, width=10)
         attempts_entry.grid(row=0, column=1, sticky="w", padx=5, pady=5)
         
-        ttk.Label(controls_frame, text="(0 = illimité)").grid(row=0, column=2, sticky="w", padx=5, pady=5)
+        ttk.Label(self.controls_frame, text="(0 = illimité)").grid(row=0, column=2, sticky="w", padx=5, pady=5)
         
         # Intervalle de vérification
-        ttk.Label(controls_frame, text="Intervalle (s) :").grid(row=1, column=0, sticky="w", padx=5, pady=5)
+        ttk.Label(self.controls_frame, text="Intervalle (s) :").grid(row=1, column=0, sticky="w", padx=5, pady=5)
         self.interval_var = tk.StringVar(value="5")
-        interval_entry = ttk.Entry(controls_frame, textvariable=self.interval_var, width=10)
+        interval_entry = ttk.Entry(self.controls_frame, textvariable=self.interval_var, width=10)
         interval_entry.grid(row=1, column=1, sticky="w", padx=5, pady=5)
         
+        # Option de surveillance de la fenêtre
+        self.window_check_var = tk.BooleanVar(value=True)
+        window_check = ttk.Checkbutton(
+            self.controls_frame, 
+            text="Surveiller et restaurer la fenêtre CoinPoker automatiquement",
+            variable=self.window_check_var
+        )
+        window_check.grid(row=2, column=0, columnspan=3, sticky="w", padx=5, pady=5)
+        
         # Boutons de contrôle
-        control_buttons_frame = ttk.Frame(controls_frame)
-        control_buttons_frame.grid(row=2, column=0, columnspan=3, pady=10)
+        control_buttons_frame = ttk.Frame(self.controls_frame)
+        control_buttons_frame.grid(row=3, column=0, columnspan=3, pady=10)
         
         self.start_button = ttk.Button(control_buttons_frame, text="Démarrer", command=self.start_hopper)
         self.start_button.pack(side="left", padx=5)
@@ -219,6 +229,13 @@ class HopperGUI:
         self.hopper_thread = threading.Thread(target=self.hopper.run, args=(max_attempts,))
         self.hopper_thread.daemon = True
         self.hopper_thread.start()
+        
+        # Si l'option est activée, démarrer le thread de surveillance de la fenêtre
+        if self.window_check_var.get():
+            self.window_check_thread = threading.Thread(target=self.hopper.check_window_focus)
+            self.window_check_thread.daemon = True
+            self.window_check_thread.start()
+            self.update_status("Surveillance automatique de la fenêtre CoinPoker activée")
         
         # Mettre à jour l'interface
         self.start_button.config(state="disabled")
