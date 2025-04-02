@@ -488,3 +488,91 @@ class CoinPokerHopper:
             self.update_status(f"Bouton REGISTERING spécifique au tournoi '{self.tournament_name}' capturé")
             self.update_status(f"Offset entre le nom du tournoi et son bouton: X={x_offset}, Y={y_offset}")
             self.update_status("Configuration des images de référence terminée!")
+            
+            if parent_window:
+                tk.messagebox.showinfo("Configuration terminée", "La configuration des images de référence est terminée avec succès!")
+        
+        # Démarrer le processus
+        show_instruction("1. Assurez-vous que CoinPoker est ouvert et visible. Cliquez sur 'Prêt' quand vous êtes prêt...", 
+                         lambda: show_instruction("2. Positionnez votre souris sur le logo CoinPoker et cliquez sur 'Prêt'", capture_logo))
+    
+    def run(self, max_attempts=None):
+        """
+        Démarre le processus de surveillance et d'inscription au tournoi
+        
+        :param max_attempts: Nombre maximum de tentatives (None = illimité)
+        """
+        self.running = True
+        attempts = 0
+        
+        self.update_status(f"Démarrage de la surveillance pour le tournoi '{self.tournament_name}'")
+        
+        # Trouver et enregistrer la fenêtre CoinPoker au démarrage
+        if not self.window_manager.find_coinpoker_window():
+            self.update_status("Fenêtre CoinPoker non trouvée. Vérifiez que l'application est ouverte.")
+            self.running = False
+            return
+        
+        while self.running and (max_attempts is None or attempts < max_attempts):
+            try:
+                attempts += 1
+                self.update_status(f"Tentative {attempts}/{max_attempts if max_attempts else 'illimité'}")
+                
+                # Première étape : s'assurer que la fenêtre CoinPoker est au premier plan
+                if not self.focus_coinpoker_window():
+                    self.update_status("Impossible de mettre la fenêtre CoinPoker au premier plan. Nouvel essai dans quelques secondes...")
+                    time.sleep(self.check_interval)
+                    continue
+                
+                # Naviguer vers la liste des tournois
+                if not self.navigate_to_tournaments():
+                    self.update_status("Navigation vers les tournois échouée. Nouvel essai dans quelques secondes...")
+                    time.sleep(self.check_interval)
+                    continue
+                
+                # Trouver le tournoi dans la liste
+                tournament_position = self.find_tournament_in_list()
+                
+                if tournament_position:
+                    self.update_status(f"Tournoi '{self.tournament_name}' trouvé à la position {tournament_position}")
+                    
+                    # Tenter de s'inscrire au tournoi
+                    if self.register_for_tournament(tournament_position):
+                        self.update_status(f"Inscription au tournoi '{self.tournament_name}' réussie!")
+                        self.running = False
+                        break
+                    else:
+                        self.update_status("Échec de l'inscription. Nouvel essai dans quelques secondes...")
+                else:
+                    self.update_status(f"Tournoi '{self.tournament_name}' non trouvé dans la vue actuelle.")
+                    
+                    # Faire défiler la liste pour chercher dans d'autres sections
+                    self.scroll_tournament_list()
+                
+            except Exception as e:
+                self.update_status(f"Erreur: {str(e)}")
+            
+            # Attendre avant la prochaine tentative
+            if self.running:
+                self.update_status(f"Prochaine vérification dans {self.check_interval} secondes...")
+                time.sleep(self.check_interval)
+        
+        self.update_status("Surveillance terminée")
+        self.running = False
+    
+    def stop(self):
+        """Arrête le processus de surveillance"""
+        self.running = False
+        self.update_status("Arrêt demandé")
+    
+    def check_window_focus(self):
+        """
+        Vérifie périodiquement si la fenêtre CoinPoker est au premier plan
+        et la restaure si nécessaire.
+        À utiliser dans un thread séparé.
+        """
+        while self.running:
+            if not self.window_manager.is_coinpoker_window_focused():
+                self.update_status("La fenêtre CoinPoker n'est plus au premier plan, restauration...")
+                self.focus_coinpoker_window()
+            time.sleep(5)  # Vérifier toutes les 5 secondes
