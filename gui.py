@@ -22,7 +22,7 @@ class HopperGUI:
         """
         self.root = root
         self.root.title("CoinPoker Tournament Hopper")
-        self.root.geometry("550x450")  # Légèrement plus grand pour accueillir l'option de surveillance de fenêtre
+        self.root.geometry("550x480")  # Plus grand pour accueillir la nouvelle option
         self.root.resizable(True, True)
         
         self.hopper = None
@@ -79,14 +79,35 @@ class HopperGUI:
         interval_entry = ttk.Entry(self.controls_frame, textvariable=self.interval_var, width=10)
         interval_entry.grid(row=1, column=1, sticky="w", padx=5, pady=5)
         
-        # Option de surveillance de la fenêtre
+        # Options de surveillance de la fenêtre
+        options_frame = ttk.Frame(self.controls_frame)
+        options_frame.grid(row=2, column=0, columnspan=3, sticky="w", padx=5, pady=5)
+        
+        # Mode arrière-plan (détection même sans avoir le focus)
+        self.background_mode_var = tk.BooleanVar(value=True)
+        background_mode_check = ttk.Checkbutton(
+            options_frame, 
+            text="Détecter les tournois même lorsque la fenêtre est en arrière-plan",
+            variable=self.background_mode_var,
+            command=self.toggle_background_mode
+        )
+        background_mode_check.pack(anchor="w", pady=2)
+        
+        # Surveillance automatique du focus
         self.window_check_var = tk.BooleanVar(value=True)
         window_check = ttk.Checkbutton(
-            self.controls_frame, 
+            options_frame, 
             text="Surveiller et restaurer la fenêtre CoinPoker automatiquement",
             variable=self.window_check_var
         )
-        window_check.grid(row=2, column=0, columnspan=3, sticky="w", padx=5, pady=5)
+        window_check.pack(anchor="w", pady=2)
+        
+        # Info bulle explicative
+        info_text = "Le mode arrière-plan permet de détecter les tournois même lorsque la fenêtre CoinPoker est cachée\n" \
+                   "derrière d'autres fenêtres. La fenêtre sera remise au premier plan uniquement lorsqu'une\n" \
+                   "action est nécessaire (clic sur le bouton d'inscription)."
+        info_label = ttk.Label(options_frame, text=info_text, foreground="gray")
+        info_label.pack(anchor="w", pady=5)
         
         # Boutons de contrôle
         control_buttons_frame = ttk.Frame(self.controls_frame)
@@ -116,6 +137,14 @@ class HopperGUI:
         
         # Ajouter un message initial
         self.update_status("Prêt à démarrer. Sélectionnez un tournoi et configurez les paramètres.")
+    
+    def toggle_background_mode(self):
+        """Active ou désactive le mode de détection en arrière-plan"""
+        if hasattr(self, 'hopper') and self.hopper:
+            # Mettre à jour le mode de détection sur le hopper existant
+            background_mode = self.background_mode_var.get()
+            self.hopper.set_background_mode(background_mode)
+            self.update_status(f"Mode de détection en arrière-plan {'activé' if background_mode else 'désactivé'}")
     
     def update_status(self, message):
         """Met à jour la zone de statut avec un nouveau message"""
@@ -190,6 +219,7 @@ class HopperGUI:
         # Initialiser le hopper avec le tournoi sélectionné
         self.hopper = CoinPokerHopper(selected_tournament)
         self.hopper.set_status_callback(self.update_status)
+        self.hopper.set_background_mode(self.background_mode_var.get())
         
         # Lancer la configuration des images
         self.hopper.setup_reference_images(self.root)
@@ -225,13 +255,18 @@ class HopperGUI:
         self.hopper.set_status_callback(self.update_status)
         self.hopper.check_interval = check_interval
         
+        # Configurer le mode de détection en arrière-plan
+        background_mode = self.background_mode_var.get()
+        self.hopper.set_background_mode(background_mode)
+        self.update_status(f"Mode de détection en arrière-plan {'activé' if background_mode else 'désactivé'}")
+        
         # Démarrer le hopper dans un thread séparé
         self.hopper_thread = threading.Thread(target=self.hopper.run, args=(max_attempts,))
         self.hopper_thread.daemon = True
         self.hopper_thread.start()
         
         # Si l'option est activée, démarrer le thread de surveillance de la fenêtre
-        if self.window_check_var.get():
+        if self.window_check_var.get() and not background_mode:
             self.window_check_thread = threading.Thread(target=self.hopper.check_window_focus)
             self.window_check_thread.daemon = True
             self.window_check_thread.start()
