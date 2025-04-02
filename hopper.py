@@ -219,7 +219,11 @@ class CoinPokerHopper:
                             button_region = pyautogui.screenshot(region=region)
                             button_region.save(f"{self.screenshots_dir}/button_check_temp.png")
                             
-                            # Comparer avec le bouton spécifique
+                            # Comparer avec l'image de référence du bouton REGISTERING
+                            specific_button_file = f"{self.images_dir}/{self.tournament_name.lower().replace(' ', '_')}_register_button.png"
+                            
+                            if os.path.exists(specific_button_file):
+                                # Comparer avec le bouton spécifique
                                 register_pos = pyautogui.locate(
                                     specific_button_file, 
                                     f"{self.screenshots_dir}/button_check_temp.png", 
