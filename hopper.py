@@ -9,9 +9,12 @@ import logging
 import pyautogui
 import tkinter as tk
 from datetime import datetime
+import cv2
+import numpy as np
+from PIL import Image
 
 from window_manager import WindowManager
-from utils.image_utils import take_screenshot, find_on_screen, click_on_image
+from utils.image_utils import take_screenshot, find_on_screen, click_on_image, find_all_on_screen
 from utils.config_utils import save_tournament_offsets, load_tournament_offsets
 
 logger = logging.getLogger("coinpoker_hopper")
@@ -32,10 +35,15 @@ class CoinPokerHopper:
         
         # Initialiser le gestionnaire de fenêtres
         self.window_manager = WindowManager()
+        self.background_mode = True  # Activer la détection en arrière-plan par défaut
         
         # Créer les dossiers nécessaires s'ils n'existent pas
         os.makedirs(self.screenshots_dir, exist_ok=True)
         os.makedirs(self.images_dir, exist_ok=True)
+        
+        # Tentative initiale de trouver la fenêtre CoinPoker
+        if not self.window_manager.find_coinpoker_window():
+            logger.warning("Fenêtre CoinPoker non trouvée lors de l'initialisation")
     
     def set_status_callback(self, callback):
         """Définit une fonction de rappel pour mettre à jour le statut dans l'interface"""
@@ -47,26 +55,35 @@ class CoinPokerHopper:
             self.status_callback(message)
         logger.info(message)
     
+    def set_background_mode(self, enabled):
+        """Active ou désactive le mode de détection en arrière-plan"""
+        self.background_mode = enabled
+        self.update_status(f"Mode de détection en arrière-plan {'activé' if enabled else 'désactivé'}")
+    
     def focus_coinpoker_window(self):
         """Tente de mettre la fenêtre CoinPoker au premier plan"""
         try:
-            # Utiliser le WindowManager pour gérer la mise au premier plan
-            if self.window_manager.ensure_coinpoker_window_focused():
+            result = self.window_manager.focus_coinpoker_window()
+            if result:
                 self.update_status("Fenêtre CoinPoker mise au premier plan")
                 time.sleep(0.5)  # Petit délai pour s'assurer que la fenêtre est bien active
                 return True
             else:
                 # Fallback : essayer l'ancienne méthode avec le logo
-                coinpoker_logo = find_on_screen(f"{self.images_dir}/coinpoker_logo.png")
+                logo_path = f"{self.images_dir}/coinpoker_logo.png"
+                if os.path.exists(logo_path):
+                    coinpoker_logo = find_on_screen(logo_path)
+                    
+                    if coinpoker_logo:
+                        pyautogui.click(coinpoker_logo)
+                        self.update_status("Fenêtre CoinPoker mise au premier plan (méthode fallback)")
+                        time.sleep(0.5)
+                        # Mettre à jour la position de la fenêtre après l'avoir trouvée
+                        self.window_manager.find_coinpoker_window()
+                        return True
                 
-                if coinpoker_logo:
-                    pyautogui.click(coinpoker_logo)
-                    self.update_status("Fenêtre CoinPoker mise au premier plan (méthode fallback)")
-                    time.sleep(0.5)
-                    return True
-                else:
-                    self.update_status("Impossible de trouver la fenêtre CoinPoker")
-                    return False
+                self.update_status("Impossible de trouver la fenêtre CoinPoker")
+                return False
         except Exception as e:
             self.update_status(f"Erreur lors de la mise au premier plan: {str(e)}")
             return False
@@ -75,7 +92,13 @@ class CoinPokerHopper:
         """Navigue vers l'onglet des tournois"""
         try:
             # Cliquer sur l'onglet Tournaments
-            tournaments_tab = click_on_image(f"{self.images_dir}/tournaments_tab.png")
+            if self.background_mode:
+                tournaments_tab = click_on_image(
+                    f"{self.images_dir}/tournaments_tab.png", 
+                    window_manager=self.window_manager
+                )
+            else:
+                tournaments_tab = click_on_image(f"{self.images_dir}/tournaments_tab.png")
             
             if tournaments_tab:
                 self.update_status("Navigation vers l'onglet tournois réussie")
@@ -95,17 +118,27 @@ class CoinPokerHopper:
         :return: Position (x, y) du tournoi si trouvé et inscriptible, None sinon
         """
         try:
-            # Prendre une capture d'écran pour l'analyse
-            screenshot_path = take_screenshot(directory=self.screenshots_dir)
-            
             # Chercher toutes les occurrences du nom du tournoi
             tournament_image = f"{self.images_dir}/{self.tournament_name.lower().replace(' ', '_')}.png"
             
             if not os.path.exists(tournament_image):
                 self.update_status(f"Image de référence pour le tournoi '{self.tournament_name}' non trouvée")
                 return None
-                
-            tournament_positions = list(pyautogui.locateAllOnScreen(tournament_image, confidence=0.8))
+            
+            if self.background_mode:
+                # En mode arrière-plan, utiliser le window_manager pour la recherche
+                tournament_positions = find_all_on_screen(
+                    tournament_image, 
+                    confidence=0.8, 
+                    window_manager=self.window_manager
+                )
+            else:
+                # En mode normal, rechercher sur l'écran visible
+                tournament_positions = [
+                    pyautogui.center(pos) for pos in list(
+                        pyautogui.locateAllOnScreen(tournament_image, confidence=0.8)
+                    )
+                ]
             
             if not tournament_positions:
                 self.update_status(f"Tournoi '{self.tournament_name}' non trouvé dans la liste actuelle")
@@ -114,8 +147,7 @@ class CoinPokerHopper:
             self.update_status(f"Trouvé {len(tournament_positions)} occurrences du tournoi '{self.tournament_name}'")
             
             # Pour chaque occurrence du tournoi, vérifier si un bouton REGISTERING est disponible sur la même ligne
-            for tournament_pos in tournament_positions:
-                tournament_center = pyautogui.center(tournament_pos)
+            for tournament_center in tournament_positions:
                 tournament_y = tournament_center[1]
                 
                 self.update_status(f"Vérification de l'occurrence à la position {tournament_center}")
@@ -127,56 +159,110 @@ class CoinPokerHopper:
                     # Utiliser les offsets préconfigurés pour vérifier si le bouton est disponible
                     expected_button_x = tournament_center[0] + offsets["x_offset"]
                     expected_button_y = tournament_center[1] + offsets["y_offset"]
+                    expected_button_position = (expected_button_x, expected_button_y)
                     
-                    # Prendre une petite capture d'écran autour de cette position pour vérifier
-                    region = (
-                        expected_button_x - 50, 
-                        expected_button_y - 10, 
-                        100, 
-                        20
-                    )
+                    # En mode arrière-plan, convertir en coordonnées relatives si nécessaire
+                    if self.background_mode and self.window_manager.window_rect:
+                        relative_pos = self.window_manager.convert_to_window_coordinates(
+                            expected_button_x, expected_button_y
+                        )
+                        if relative_pos:
+                            rel_x, rel_y = relative_pos
+                            # Prendre une petite capture autour de cette position
+                            window_image = self.window_manager.capture_window_area()
+                            if window_image:
+                                # Extraire la région d'intérêt
+                                region_x = max(0, rel_x - 50)
+                                region_y = max(0, rel_y - 10)
+                                region_width = 100
+                                region_height = 20
+                                
+                                region = window_image.crop((
+                                    region_x, 
+                                    region_y, 
+                                    min(window_image.width, region_x + region_width), 
+                                    min(window_image.height, region_y + region_height)
+                                ))
+                                
+                                # Sauvegarder pour vérification
+                                region_path = f"{self.screenshots_dir}/button_check_temp.png"
+                                region.save(region_path)
+                                
+                                # Vérifier si cette région contient un bouton REGISTERING
+                                specific_button_file = f"{self.images_dir}/{self.tournament_name.lower().replace(' ', '_')}_register_button.png"
+                                
+                                if os.path.exists(specific_button_file):
+                                    # Utiliser OpenCV pour la correspondance de template
+                                    needle = Image.open(specific_button_file)
+                                    haystack_cv = cv2.cvtColor(np.array(region), cv2.COLOR_RGB2BGR)
+                                    needle_cv = cv2.cvtColor(np.array(needle), cv2.COLOR_RGB2BGR)
+                                    
+                                    result = cv2.matchTemplate(haystack_cv, needle_cv, cv2.TM_CCOEFF_NORMED)
+                                    min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result)
+                                    
+                                    if max_val >= 0.7:
+                                        self.update_status(f"Bouton REGISTERING trouvé pour l'occurrence du tournoi à {tournament_center}")
+                                        return tournament_center
                     
-                    try:
-                        # Vérifier si cette région contient un bouton REGISTERING
-                        button_region = pyautogui.screenshot(region=region)
-                        button_region.save(f"{self.screenshots_dir}/button_check_temp.png")
+                    # Si on n'a pas pu vérifier en mode arrière-plan ou si le mode est désactivé
+                    if not self.background_mode:
+                        # Prendre une petite capture d'écran autour de cette position pour vérifier
+                        region = (
+                            expected_button_x - 50, 
+                            expected_button_y - 10, 
+                            100, 
+                            20
+                        )
                         
-                        # Comparer avec l'image de référence du bouton REGISTERING
-                        specific_button_file = f"{self.images_dir}/{self.tournament_name.lower().replace(' ', '_')}_register_button.png"
-                        
-                        if os.path.exists(specific_button_file):
+                        try:
+                            # Vérifier si cette région contient un bouton REGISTERING
+                            button_region = pyautogui.screenshot(region=region)
+                            button_region.save(f"{self.screenshots_dir}/button_check_temp.png")
+                            
                             # Comparer avec le bouton spécifique
-                            register_pos = pyautogui.locate(
-                                specific_button_file, 
-                                f"{self.screenshots_dir}/button_check_temp.png", 
-                                confidence=0.7
-                            )
-                        else:
-                            # Comparer avec le bouton générique
-                            register_pos = pyautogui.locate(
-                                f"{self.images_dir}/registering_button.png", 
-                                f"{self.screenshots_dir}/button_check_temp.png", 
-                                confidence=0.7
-                            )
-                        
-                        if register_pos:
-                            self.update_status(f"Bouton REGISTERING trouvé pour l'occurrence du tournoi à {tournament_center}")
-                            return tournament_center
-                    except:
-                        pass
+                                register_pos = pyautogui.locate(
+                                    specific_button_file, 
+                                    f"{self.screenshots_dir}/button_check_temp.png", 
+                                    confidence=0.7
+                                )
+                            else:
+                                # Comparer avec le bouton générique
+                                register_pos = pyautogui.locate(
+                                    f"{self.images_dir}/registering_button.png", 
+                                    f"{self.screenshots_dir}/button_check_temp.png", 
+                                    confidence=0.7
+                                )
+                            
+                            if register_pos:
+                                self.update_status(f"Bouton REGISTERING trouvé pour l'occurrence du tournoi à {tournament_center}")
+                                return tournament_center
+                        except:
+                            pass
                 
                 # Méthode alternative : rechercher un bouton REGISTERING sur la même ligne
                 registering_button_image = f"{self.images_dir}/registering_button.png"
                 if not os.path.exists(registering_button_image):
                     self.update_status("Image de référence pour le bouton REGISTERING non trouvée")
                     return None
-                    
-                all_registering_buttons = list(pyautogui.locateAllOnScreen(registering_button_image, confidence=0.8))
+                
+                if self.background_mode:
+                    # En mode arrière-plan, utiliser le window_manager pour la recherche
+                    all_registering_buttons = find_all_on_screen(
+                        registering_button_image, 
+                        confidence=0.8, 
+                        window_manager=self.window_manager
+                    )
+                else:
+                    # En mode normal, rechercher sur l'écran visible
+                    all_registering_buttons = [
+                        pyautogui.center(pos) for pos in list(
+                            pyautogui.locateAllOnScreen(registering_button_image, confidence=0.8)
+                        )
+                    ]
                 
                 if all_registering_buttons:
                     # Trouver le bouton le plus proche sur la même ligne (± 20 pixels)
-                    for button in all_registering_buttons:
-                        button_center = pyautogui.center(button)
+                    for button_center in all_registering_buttons:
                         y_diff = abs(button_center[1] - tournament_y)
                         
                         if y_diff < 20:  # Tolérance de 20 pixels verticalement
@@ -202,6 +288,10 @@ class CoinPokerHopper:
             offsets = load_tournament_offsets(self.tournament_name)
             specific_button_file = f"{self.images_dir}/{self.tournament_name.lower().replace(' ', '_')}_register_button.png"
             
+            # En mode arrière-plan, mettre la fenêtre au premier plan avant de cliquer
+            if self.background_mode:
+                self.focus_coinpoker_window()
+            
             if offsets and os.path.exists(specific_button_file):
                 # Méthode 1: Utiliser les offsets pré-configurés (méthode la plus précise)
                 self.update_status("Utilisation des offsets pré-configurés pour trouver le bouton d'inscription")
@@ -218,7 +308,10 @@ class CoinPokerHopper:
                 time.sleep(1)
                 
                 # Chercher le bouton ACCEPT si une confirmation est nécessaire
-                accept_button = click_on_image(f"{self.images_dir}/accept_button.png")
+                if self.background_mode:
+                    accept_button = click_on_image(f"{self.images_dir}/accept_button.png", window_manager=self.window_manager)
+                else:
+                    accept_button = click_on_image(f"{self.images_dir}/accept_button.png")
                 
                 if accept_button:
                     self.update_status(f"Inscription au tournoi '{self.tournament_name}' confirmée!")
@@ -242,8 +335,21 @@ class CoinPokerHopper:
                 if not os.path.exists(registering_button_image):
                     self.update_status("Image de référence pour le bouton REGISTERING non trouvée")
                     return False
-                    
-                all_registering_buttons = list(pyautogui.locateAllOnScreen(registering_button_image, confidence=0.8))
+                
+                if self.background_mode:
+                    # En mode arrière-plan, utiliser le window_manager pour la recherche
+                    all_registering_buttons = find_all_on_screen(
+                        registering_button_image, 
+                        confidence=0.8, 
+                        window_manager=self.window_manager
+                    )
+                else:
+                    # En mode normal, rechercher sur l'écran visible
+                    all_registering_buttons = [
+                        pyautogui.center(pos) for pos in list(
+                            pyautogui.locateAllOnScreen(registering_button_image, confidence=0.8)
+                        )
+                    ]
                 
                 if all_registering_buttons:
                     self.update_status(f"Trouvé {len(all_registering_buttons)} boutons REGISTERING au total")
@@ -252,8 +358,7 @@ class CoinPokerHopper:
                     correct_button = None
                     closest_y_diff = float('inf')
                     
-                    for button in all_registering_buttons:
-                        button_center = pyautogui.center(button)
+                    for button_center in all_registering_buttons:
                         y_diff = abs(button_center[1] - tournament_y)
                         
                         # Si ce bouton est plus proche verticalement que les précédents
@@ -269,7 +374,10 @@ class CoinPokerHopper:
                         time.sleep(1)
                         
                         # Chercher le bouton ACCEPT si une confirmation est nécessaire
-                        accept_button = click_on_image(f"{self.images_dir}/accept_button.png")
+                        if self.background_mode:
+                            accept_button = click_on_image(f"{self.images_dir}/accept_button.png", window_manager=self.window_manager)
+                        else:
+                            accept_button = click_on_image(f"{self.images_dir}/accept_button.png")
                         
                         if accept_button:
                             self.update_status(f"Inscription au tournoi '{self.tournament_name}' confirmée!")
@@ -286,13 +394,19 @@ class CoinPokerHopper:
                         time.sleep(0.5)
                         
                         # Essayer à nouveau de trouver le bouton après avoir sélectionné le tournoi
-                        register_button = click_on_image(f"{self.images_dir}/registering_button.png")
+                        if self.background_mode:
+                            register_button = click_on_image(f"{self.images_dir}/registering_button.png", window_manager=self.window_manager)
+                        else:
+                            register_button = click_on_image(f"{self.images_dir}/registering_button.png")
                         
                         if register_button:
                             time.sleep(1)
                             
                             # Chercher le bouton ACCEPT si une confirmation est nécessaire
-                            accept_button = click_on_image(f"{self.images_dir}/accept_button.png")
+                            if self.background_mode:
+                                accept_button = click_on_image(f"{self.images_dir}/accept_button.png", window_manager=self.window_manager)
+                            else:
+                                accept_button = click_on_image(f"{self.images_dir}/accept_button.png")
                             
                             if accept_button:
                                 self.update_status(f"Inscription au tournoi '{self.tournament_name}' confirmée!")
@@ -312,13 +426,19 @@ class CoinPokerHopper:
                     time.sleep(0.5)
                     
                     # Chercher le bouton après avoir sélectionné le tournoi
-                    register_button = click_on_image(f"{self.images_dir}/registering_button.png")
+                    if self.background_mode:
+                        register_button = click_on_image(f"{self.images_dir}/registering_button.png", window_manager=self.window_manager)
+                    else:
+                        register_button = click_on_image(f"{self.images_dir}/registering_button.png")
                     
                     if register_button:
                         time.sleep(1)
                         
                         # Chercher le bouton ACCEPT si une confirmation est nécessaire
-                        accept_button = click_on_image(f"{self.images_dir}/accept_button.png")
+                        if self.background_mode:
+                            accept_button = click_on_image(f"{self.images_dir}/accept_button.png", window_manager=self.window_manager)
+                        else:
+                            accept_button = click_on_image(f"{self.images_dir}/accept_button.png")
                         
                         if accept_button:
                             self.update_status(f"Inscription au tournoi '{self.tournament_name}' confirmée!")
@@ -336,6 +456,10 @@ class CoinPokerHopper:
     def scroll_tournament_list(self):
         """Fait défiler la liste des tournois vers le bas"""
         try:
+            # Si en mode arrière-plan, mettre la fenêtre au premier plan avant de défiler
+            if self.background_mode:
+                self.focus_coinpoker_window()
+            
             # Trouver la zone de la liste des tournois
             # Pour simplifier, nous utiliserons une position approximative
             
@@ -510,16 +634,21 @@ class CoinPokerHopper:
         # Trouver et enregistrer la fenêtre CoinPoker au démarrage
         if not self.window_manager.find_coinpoker_window():
             self.update_status("Fenêtre CoinPoker non trouvée. Vérifiez que l'application est ouverte.")
-            self.running = False
-            return
+            # On ne quitte pas immédiatement, on essaiera de la trouver à chaque itération
         
         while self.running and (max_attempts is None or attempts < max_attempts):
             try:
                 attempts += 1
                 self.update_status(f"Tentative {attempts}/{max_attempts if max_attempts else 'illimité'}")
                 
-                # Première étape : s'assurer que la fenêtre CoinPoker est au premier plan
-                if not self.focus_coinpoker_window():
+                # Si nous n'avons pas encore trouvé la fenêtre, essayer à nouveau
+                if not self.window_manager.window_rect and not self.window_manager.find_coinpoker_window():
+                    self.update_status("Fenêtre CoinPoker non trouvée. Nouvel essai dans quelques secondes...")
+                    time.sleep(self.check_interval)
+                    continue
+                
+                # Si nous ne sommes pas en mode arrière-plan, mettre la fenêtre au premier plan
+                if not self.background_mode and not self.focus_coinpoker_window():
                     self.update_status("Impossible de mettre la fenêtre CoinPoker au premier plan. Nouvel essai dans quelques secondes...")
                     time.sleep(self.check_interval)
                     continue
@@ -572,7 +701,7 @@ class CoinPokerHopper:
         À utiliser dans un thread séparé.
         """
         while self.running:
-            if not self.window_manager.is_coinpoker_window_focused():
+            if not self.background_mode and not self.window_manager.is_coinpoker_window_focused():
                 self.update_status("La fenêtre CoinPoker n'est plus au premier plan, restauration...")
                 self.focus_coinpoker_window()
             time.sleep(5)  # Vérifier toutes les 5 secondes
